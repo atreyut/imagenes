@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Convertidor de imágenes crudo</title>
+    <title>Convertidor de imágenes</title>
     <!-- Librería necesaria para leer HEIC/HEIF en el navegador -->
     <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
 </head>
@@ -57,11 +57,32 @@
             <br><br>
             
             <label><strong>Técnica de ajuste:</strong></label><br>
-            <input type="radio" id="fitCrop" name="fitMode" value="crop" checked>
-            <label for="fitCrop">Recortar (crop - quitar sobrantes centrados)</label><br>
             
-            <input type="radio" id="fitStretch" name="fitMode" value="stretch">
-            <label for="fitStretch">Extender (stretch - desproporcionar imagen)</label>
+            <!-- Opción Crop -->
+            <input type="radio" id="fitCrop" name="fitMode" value="crop" checked onchange="toggleFillOptions()">
+            <label for="fitCrop">Recortar (crop - quitar sobrantes)</label><br>
+            
+            <!-- Opción Stretch -->
+            <input type="radio" id="fitStretch" name="fitMode" value="stretch" onchange="toggleFillOptions()">
+            <label for="fitStretch">Extender (stretch - desproporcionar)</label><br>
+
+            <!-- Opción Fill (Nueva) -->
+            <input type="radio" id="fitFill" name="fitMode" value="fill" onchange="toggleFillOptions()">
+            <label for="fitFill">Rellenar (fill - completar espacio faltante)</label>
+
+            <!-- Opciones de Relleno (ocultas por defecto) -->
+            <div id="fillOptions" style="display: none; margin-left: 20px; margin-top: 10px; border-left: 2px solid #ccc; padding-left: 10px;">
+                <p><strong>Configuración de relleno:</strong></p>
+                
+                <input type="checkbox" id="autoColor" checked onchange="toggleManualColors()">
+                <label for="autoColor">Detección automática de color (borde más popular)</label>
+                
+                <div id="manualColorSection" style="display: none; margin-top: 5px;">
+                    <label>Color inicio (Izq / Arr): <input type="color" id="manualColor1" value="#ffffff"></label><br>
+                    <label>Color fin (Der / Abj): <input type="color" id="manualColor2" value="#ffffff"></label>
+                </div>
+            </div>
+
         </fieldset>
     </div>
 
@@ -72,7 +93,7 @@
             <label>Ancho deseado (px): <input type="number" id="targetWidth" placeholder="Ej. 1920"></label><br>
             <label>Alto deseado (px): <input type="number" id="targetHeight" placeholder="Ej. 1080"></label>
             <br>
-            <small>Usa método de interpolación de alta calidad del navegador.</small>
+            <small>Usa interpolación bicúbica del navegador.</small>
         </fieldset>
     </div>
 
@@ -96,14 +117,26 @@
 
 
     <script>
-        // Lógica de interfaz: Mostrar u ocultar secciones
+        // --- LÓGICA DE INTERFAZ ---
+
         function toggleSections() {
             const isRatio = document.getElementById('modeRatio').checked;
             document.getElementById('sectionRatio').style.display = isRatio ? 'block' : 'none';
             document.getElementById('sectionPixel').style.display = isRatio ? 'none' : 'block';
         }
 
-        // Función principal de procesamiento
+        function toggleFillOptions() {
+            const isFill = document.getElementById('fitFill').checked;
+            document.getElementById('fillOptions').style.display = isFill ? 'block' : 'none';
+        }
+
+        function toggleManualColors() {
+            const isAuto = document.getElementById('autoColor').checked;
+            document.getElementById('manualColorSection').style.display = isAuto ? 'none' : 'block';
+        }
+
+        // --- LÓGICA DE PROCESAMIENTO ---
+
         async function processImage() {
             const fileInput = document.getElementById('inputImage');
             const statusDiv = document.getElementById('status');
@@ -112,7 +145,7 @@
             const downloadLink = document.getElementById('downloadLink');
             const previewImage = document.getElementById('previewImage');
 
-            // Limpiar estados anteriores
+            // Reset UI
             statusDiv.textContent = "Procesando...";
             downloadLink.style.display = 'none';
             previewImage.style.display = 'none';
@@ -126,133 +159,176 @@
             let imageSource = null;
 
             try {
-                // 1. Cargar la imagen (Manejo especial para HEIC)
+                // 1. Cargar imagen (Soporte HEIC)
                 if (file.type === "image/heic" || file.type === "image/heif" || file.name.toLowerCase().endsWith('.heic')) {
-                    statusDiv.textContent = "Convirtiendo HEIC a formato legible...";
+                    statusDiv.textContent = "Convirtiendo HEIC...";
                     try {
                         const convertedBlob = await heic2any({ blob: file, toType: "image/jpeg" });
                         imageSource = await loadImage(URL.createObjectURL(convertedBlob));
                     } catch (e) {
-                        statusDiv.textContent = "Error al leer HEIC. Asegúrate de tener conexión para cargar la librería o que el archivo sea válido.";
+                        statusDiv.textContent = "Error HEIC. Revisa tu conexión o el archivo.";
                         return;
                     }
                 } else {
-                    // Carga estándar
                     imageSource = await loadImage(URL.createObjectURL(file));
                 }
 
-                statusDiv.textContent = "Aplicando transformaciones...";
+                statusDiv.textContent = "Calculando geometría...";
 
-                // 2. Determinar dimensiones y modo
+                // 2. Variables de geometría
                 const mode = document.querySelector('input[name="processMode"]:checked').value;
+                let finalW, finalH;
                 
-                let finalWidth, finalHeight;
-                let sourceX = 0, sourceY = 0, sourceW = imageSource.width, sourceH = imageSource.height;
-
+                // MODO: Pixeles exactos
                 if (mode === 'pixel') {
-                    // --- MODO PIXELES EXACTOS ---
-                    const targetW = parseInt(document.getElementById('targetWidth').value);
-                    const targetH = parseInt(document.getElementById('targetHeight').value);
+                    finalW = parseInt(document.getElementById('targetWidth').value);
+                    finalH = parseInt(document.getElementById('targetHeight').value);
+                    if (!finalW || !finalH) throw new Error("Faltan dimensiones.");
 
-                    if (!targetW || !targetH) {
-                        throw new Error("Debes ingresar ancho y alto en pixeles.");
-                    }
-
-                    finalWidth = targetW;
-                    finalHeight = targetH;
-                    
-                    // En modo pixel, se usa la imagen completa y se redimensiona (similar a stretch/cubic)
-                    // No se recorta a menos que se especifique logica adicional, 
-                    // pero la petición dice "ampliar o reducir... ingrese pixels H y W"
-                    canvas.width = finalWidth;
-                    canvas.height = finalHeight;
-
-                    // Calidad alta para redimensionado
-                    ctx.imageSmoothingEnabled = true;
+                    canvas.width = finalW;
+                    canvas.height = finalH;
                     ctx.imageSmoothingQuality = 'high';
-                    
-                    ctx.drawImage(imageSource, 0, 0, finalWidth, finalHeight);
-
-                } else {
-                    // --- MODO PROPORCIÓN (RATIO) ---
+                    ctx.drawImage(imageSource, 0, 0, finalW, finalH);
+                } 
+                // MODO: Proporción
+                else {
                     const rW = parseFloat(document.getElementById('ratioW').value);
                     const rH = parseFloat(document.getElementById('ratioH').value);
                     const fitMode = document.querySelector('input[name="fitMode"]:checked').value;
 
-                    if (!rW || !rH) throw new Error("Ingresa valores válidos para la proporción.");
+                    if (!rW || !rH) throw new Error("Proporción inválida.");
 
                     const targetRatio = rW / rH;
                     const sourceRatio = imageSource.width / imageSource.height;
 
+                    // --- SUB-MODO: EXTENDER (Stretch) ---
                     if (fitMode === 'stretch') {
-                        // Extender/Desproporcionar
-                        // Mantenemos el tamaño base de la imagen original para no perder calidad, 
-                        // pero ajustamos una dimensión para cumplir el ratio.
-                        // Estrategia: Mantener el ancho original, calcular nuevo alto según ratio.
-                        finalWidth = imageSource.width;
-                        finalHeight = Math.round(finalWidth / targetRatio);
+                        finalW = imageSource.width;
+                        finalH = Math.round(finalW / targetRatio);
+                        canvas.width = finalW;
+                        canvas.height = finalH;
+                        ctx.drawImage(imageSource, 0, 0, finalW, finalH);
+                    }
+                    // --- SUB-MODO: RECORTAR (Crop) ---
+                    else if (fitMode === 'crop') {
+                        let cropW, cropH, srcX, srcY;
                         
-                        // Margen de error +-1 pixel (Math.round ya maneja el entero más cercano)
-                        canvas.width = finalWidth;
-                        canvas.height = finalHeight;
-                        
-                        ctx.drawImage(imageSource, 0, 0, finalWidth, finalHeight);
-
-                    } else {
-                        // Recortar (Crop)
-                        // Lógica: Encontrar el rectángulo más grande con el ratio destino dentro de la imagen fuente.
-                        
-                        let cropW, cropH;
-
-                        if (sourceRatio > targetRatio) {
-                            // La imagen es más ancha que el objetivo. Cortar lados.
+                        if (sourceRatio > targetRatio) { // Imagen muy ancha -> Cortar lados
                             cropH = imageSource.height;
                             cropW = Math.round(cropH * targetRatio);
-                            sourceX = Math.round((imageSource.width - cropW) / 2); // Centrar X
-                            sourceY = 0;
-                        } else {
-                            // La imagen es más alta que el objetivo. Cortar arriba/abajo.
+                            srcX = Math.round((imageSource.width - cropW) / 2);
+                            srcY = 0;
+                        } else { // Imagen muy alta -> Cortar arriba/abajo
                             cropW = imageSource.width;
                             cropH = Math.round(cropW / targetRatio);
-                            sourceX = 0;
-                            sourceY = Math.round((imageSource.height - cropH) / 2); // Centrar Y
+                            srcX = 0;
+                            srcY = Math.round((imageSource.height - cropH) / 2);
                         }
-
-                        // El canvas tendrá el tamaño del recorte
+                        
                         canvas.width = cropW;
                         canvas.height = cropH;
+                        ctx.drawImage(imageSource, srcX, srcY, cropW, cropH, 0, 0, cropW, cropH);
+                    }
+                    // --- SUB-MODO: RELLENAR (Fill) ---
+                    else if (fitMode === 'fill') {
+                        // Calcular tamaño del lienzo final para contener la imagen completa
+                        let drawX = 0, drawY = 0;
 
-                        // Dibujar la parte recortada
-                        ctx.drawImage(
-                            imageSource, 
-                            sourceX, sourceY, cropW, cropH, // Rectángulo fuente
-                            0, 0, cropW, cropH              // Rectángulo destino
-                        );
+                        if (sourceRatio > targetRatio) {
+                            // La imagen es más ancha que el destino -> Relleno ARRIBA y ABAJO (Letterbox)
+                            // El ancho final es el ancho de la imagen. El alto crece.
+                            finalW = imageSource.width;
+                            finalH = Math.round(finalW / targetRatio);
+                            
+                            // Centramos la imagen en Y
+                            drawY = Math.round((finalH - imageSource.height) / 2);
+                            drawX = 0;
+
+                        } else {
+                            // La imagen es más alta que el destino -> Relleno IZQUIERDA y DERECHA (Pillarbox)
+                            // El alto final es el alto de la imagen. El ancho crece.
+                            finalH = imageSource.height;
+                            finalW = Math.round(finalH * targetRatio);
+
+                            // Centramos la imagen en X
+                            drawX = Math.round((finalW - imageSource.width) / 2);
+                            drawY = 0;
+                        }
+
+                        canvas.width = finalW;
+                        canvas.height = finalH;
+
+                        // --- LÓGICA DE COLOR DE RELLENO ---
+                        let color1, color2; // 1: Inicio (Arr/Izq), 2: Fin (Abj/Der)
+
+                        const isAuto = document.getElementById('autoColor').checked;
+
+                        if (isAuto) {
+                            // Crear un canvas temporal pequeño para leer los pixeles sin ensuciar el principal
+                            const tmpCanvas = document.createElement('canvas');
+                            tmpCanvas.width = imageSource.width;
+                            tmpCanvas.height = imageSource.height;
+                            const tmpCtx = tmpCanvas.getContext('2d');
+                            tmpCtx.drawImage(imageSource, 0, 0);
+
+                            if (sourceRatio > targetRatio) {
+                                // Faltan Arriba y Abajo. 
+                                // Leer las 2 primeras filas (Arriba) y las 2 últimas (Abajo)
+                                color1 = getDominantColor(tmpCtx, 0, 0, imageSource.width, 2); 
+                                color2 = getDominantColor(tmpCtx, 0, imageSource.height - 2, imageSource.width, 2);
+                            } else {
+                                // Faltan Izquierda y Derecha.
+                                // Leer las 2 primeras columnas (Izq) y las 2 últimas (Der)
+                                color1 = getDominantColor(tmpCtx, 0, 0, 2, imageSource.height);
+                                color2 = getDominantColor(tmpCtx, imageSource.width - 2, 0, 2, imageSource.height);
+                            }
+                        } else {
+                            // Colores manuales
+                            color1 = document.getElementById('manualColor1').value;
+                            color2 = document.getElementById('manualColor2').value;
+                        }
+
+                        // Dibujar los rectángulos de fondo primero
+                        if (sourceRatio > targetRatio) {
+                            // Dibujar Arriba
+                            ctx.fillStyle = color1;
+                            ctx.fillRect(0, 0, finalW, drawY);
+                            // Dibujar Abajo
+                            ctx.fillStyle = color2;
+                            // +1 pixel para evitar líneas blancas por redondeo
+                            ctx.fillRect(0, drawY + imageSource.height - 1, finalW, finalH - (drawY + imageSource.height) + 2);
+                        } else {
+                            // Dibujar Izquierda
+                            ctx.fillStyle = color1;
+                            ctx.fillRect(0, 0, drawX, finalH);
+                            // Dibujar Derecha
+                            ctx.fillStyle = color2;
+                            ctx.fillRect(drawX + imageSource.width - 1, 0, finalW - (drawX + imageSource.width) + 2, finalH);
+                        }
+
+                        // Finalmente, dibujar la imagen centrada
+                        ctx.drawImage(imageSource, drawX, drawY);
                     }
                 }
 
-                // 3. Exportar al formato deseado
+                // 3. Exportar
                 const format = document.getElementById('outputFormat').value;
                 const quality = parseFloat(document.getElementById('quality').value);
-                
-                // Convertir
                 const dataUrl = canvas.toDataURL(format, quality);
 
-                // 4. Mostrar resultados
                 previewImage.src = dataUrl;
                 previewImage.style.display = 'block';
 
-                // Configurar enlace de descarga
                 let ext = format.split('/')[1];
                 if(ext === 'jpeg') ext = 'jpg';
                 
                 downloadLink.href = dataUrl;
-                downloadLink.download = `convertida_${Date.now()}.${ext}`;
+                downloadLink.download = `procesada_${Date.now()}.${ext}`;
                 downloadLink.textContent = `Descargar imagen (.${ext})`;
                 downloadLink.style.display = 'inline-block';
                 downloadLink.style.fontSize = "1.5em";
 
-                statusDiv.textContent = "¡Proceso completado!";
+                statusDiv.textContent = "¡Listo!";
 
             } catch (error) {
                 console.error(error);
@@ -260,7 +336,7 @@
             }
         }
 
-        // Promesa para cargar imagen asíncronamente
+        // Función auxiliar para cargar imagen
         function loadImage(src) {
             return new Promise((resolve, reject) => {
                 const img = new Image();
@@ -268,6 +344,40 @@
                 img.onerror = (e) => reject(e);
                 img.src = src;
             });
+        }
+
+        // Función para obtener el color más popular en un área rectangular
+        function getDominantColor(ctx, x, y, w, h) {
+            try {
+                // Obtener datos de píxeles (RGBA)
+                const imgData = ctx.getImageData(x, y, w, h).data;
+                const colorCounts = {};
+                let maxCount = 0;
+                let dominantColor = 'rgb(0,0,0)';
+
+                // Recorrer de 4 en 4 (R, G, B, Alpha)
+                for (let i = 0; i < imgData.length; i += 4) {
+                    const r = imgData[i];
+                    const g = imgData[i + 1];
+                    const b = imgData[i + 2];
+                    const alpha = imgData[i + 3];
+
+                    // Ignorar pixeles transparentes
+                    if (alpha < 10) continue;
+
+                    const key = `${r},${g},${b}`;
+                    colorCounts[key] = (colorCounts[key] || 0) + 1;
+
+                    if (colorCounts[key] > maxCount) {
+                        maxCount = colorCounts[key];
+                        dominantColor = `rgb(${r},${g},${b})`;
+                    }
+                }
+                return dominantColor;
+            } catch (e) {
+                console.warn("No se pudo detectar color (posible taint del canvas local), usando negro fallback.");
+                return '#000000';
+            }
         }
     </script>
 </body>
