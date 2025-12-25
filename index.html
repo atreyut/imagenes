@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Convertidor de imágenes crudo</title>
+    <!-- Librería necesaria para leer HEIC/HEIF en el navegador -->
+    <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
+</head>
+<body>
+
+    <h1>Convertidor y manipulador de imágenes (CPU local)</h1>
+    <p>Procesa PNG, JPG, WEBP, HEIC, HEIF.</p>
+    <hr>
+
+    <!-- 1. SELECCIÓN DE ARCHIVO -->
+    <h3>1. Seleccionar imagen</h3>
+    <input type="file" id="inputImage" accept="image/png, image/jpeg, image/webp, image/heic, image/heif">
+    <br><br>
+    <div id="fileInfo"></div>
+
+    <hr>
+
+    <!-- 2. SELECCIÓN DE FORMATO DE SALIDA -->
+    <h3>2. Formato de salida</h3>
+    <label for="outputFormat">Convertir a: </label>
+    <select id="outputFormat">
+        <option value="image/jpeg">JPG / JPEG</option>
+        <option value="image/png">PNG</option>
+        <option value="image/webp">WEBP</option>
+    </select>
+    <br>
+    <label for="quality">Calidad (0.1 a 1.0, solo JPG/WEBP): </label>
+    <input type="number" id="quality" value="0.9" step="0.1" min="0.1" max="1.0" style="width: 50px;">
+
+    <hr>
+
+    <!-- 3. MODO DE OPERACIÓN -->
+    <h3>3. Método de transformación</h3>
+    <p>Selecciona una opción (son excluyentes):</p>
+
+    <input type="radio" id="modeRatio" name="processMode" value="ratio" checked onchange="toggleSections()">
+    <label for="modeRatio"><strong>Modo proporción (aspect ratio)</strong></label>
+    <br>
+    <input type="radio" id="modePixel" name="processMode" value="pixel" onchange="toggleSections()">
+    <label for="modePixel"><strong>Modo dimensiones exactas (px)</strong></label>
+
+    <br><br>
+
+    <!-- SECCIÓN: PROPORCIÓN -->
+    <div id="sectionRatio">
+        <fieldset>
+            <legend>Configuración de proporción</legend>
+            <label>Ratio ancho (W): <input type="number" id="ratioW" value="16" style="width: 50px;"></label>
+            :
+            <label>Ratio alto (H): <input type="number" id="ratioH" value="9" style="width: 50px;"></label>
+            <br><br>
+            
+            <label><strong>Técnica de ajuste:</strong></label><br>
+            <input type="radio" id="fitCrop" name="fitMode" value="crop" checked>
+            <label for="fitCrop">Recortar (crop - quitar sobrantes centrados)</label><br>
+            
+            <input type="radio" id="fitStretch" name="fitMode" value="stretch">
+            <label for="fitStretch">Extender (stretch - desproporcionar imagen)</label>
+        </fieldset>
+    </div>
+
+    <!-- SECCIÓN: PIXELES -->
+    <div id="sectionPixel" style="display: none;">
+        <fieldset>
+            <legend>Configuración de dimensiones</legend>
+            <label>Ancho deseado (px): <input type="number" id="targetWidth" placeholder="Ej. 1920"></label><br>
+            <label>Alto deseado (px): <input type="number" id="targetHeight" placeholder="Ej. 1080"></label>
+            <br>
+            <small>Usa método de interpolación de alta calidad del navegador.</small>
+        </fieldset>
+    </div>
+
+    <hr>
+
+    <!-- 4. ACCIÓN -->
+    <button type="button" onclick="processImage()" style="font-size: 1.2em; cursor: pointer;">Procesar y convertir</button>
+    
+    <hr>
+
+    <!-- 5. RESULTADO -->
+    <h3>Resultados:</h3>
+    <div id="status"></div>
+    <br>
+    <img id="previewImage" alt="Vista previa" style="max-width: 90vw; display: none; border: 1px solid black;">
+    <br><br>
+    <a id="downloadLink" style="display: none;" download="imagen-convertida">Descargar imagen</a>
+
+    <!-- Canvas oculto para procesamiento -->
+    <canvas id="canvas" style="display: none;"></canvas>
+
+
+    <script>
+        // Lógica de interfaz: Mostrar u ocultar secciones
+        function toggleSections() {
+            const isRatio = document.getElementById('modeRatio').checked;
+            document.getElementById('sectionRatio').style.display = isRatio ? 'block' : 'none';
+            document.getElementById('sectionPixel').style.display = isRatio ? 'none' : 'block';
+        }
+
+        // Función principal de procesamiento
+        async function processImage() {
+            const fileInput = document.getElementById('inputImage');
+            const statusDiv = document.getElementById('status');
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            const downloadLink = document.getElementById('downloadLink');
+            const previewImage = document.getElementById('previewImage');
+
+            // Limpiar estados anteriores
+            statusDiv.textContent = "Procesando...";
+            downloadLink.style.display = 'none';
+            previewImage.style.display = 'none';
+
+            if (fileInput.files.length === 0) {
+                statusDiv.textContent = "Error: Por favor selecciona una imagen primero.";
+                return;
+            }
+
+            const file = fileInput.files[0];
+            let imageSource = null;
+
+            try {
+                // 1. Cargar la imagen (Manejo especial para HEIC)
+                if (file.type === "image/heic" || file.type === "image/heif" || file.name.toLowerCase().endsWith('.heic')) {
+                    statusDiv.textContent = "Convirtiendo HEIC a formato legible...";
+                    try {
+                        const convertedBlob = await heic2any({ blob: file, toType: "image/jpeg" });
+                        imageSource = await loadImage(URL.createObjectURL(convertedBlob));
+                    } catch (e) {
+                        statusDiv.textContent = "Error al leer HEIC. Asegúrate de tener conexión para cargar la librería o que el archivo sea válido.";
+                        return;
+                    }
+                } else {
+                    // Carga estándar
+                    imageSource = await loadImage(URL.createObjectURL(file));
+                }
+
+                statusDiv.textContent = "Aplicando transformaciones...";
+
+                // 2. Determinar dimensiones y modo
+                const mode = document.querySelector('input[name="processMode"]:checked').value;
+                
+                let finalWidth, finalHeight;
+                let sourceX = 0, sourceY = 0, sourceW = imageSource.width, sourceH = imageSource.height;
+
+                if (mode === 'pixel') {
+                    // --- MODO PIXELES EXACTOS ---
+                    const targetW = parseInt(document.getElementById('targetWidth').value);
+                    const targetH = parseInt(document.getElementById('targetHeight').value);
+
+                    if (!targetW || !targetH) {
+                        throw new Error("Debes ingresar ancho y alto en pixeles.");
+                    }
+
+                    finalWidth = targetW;
+                    finalHeight = targetH;
+                    
+                    // En modo pixel, se usa la imagen completa y se redimensiona (similar a stretch/cubic)
+                    // No se recorta a menos que se especifique logica adicional, 
+                    // pero la petición dice "ampliar o reducir... ingrese pixels H y W"
+                    canvas.width = finalWidth;
+                    canvas.height = finalHeight;
+
+                    // Calidad alta para redimensionado
+                    ctx.imageSmoothingEnabled = true;
+                    ctx.imageSmoothingQuality = 'high';
+                    
+                    ctx.drawImage(imageSource, 0, 0, finalWidth, finalHeight);
+
+                } else {
+                    // --- MODO PROPORCIÓN (RATIO) ---
+                    const rW = parseFloat(document.getElementById('ratioW').value);
+                    const rH = parseFloat(document.getElementById('ratioH').value);
+                    const fitMode = document.querySelector('input[name="fitMode"]:checked').value;
+
+                    if (!rW || !rH) throw new Error("Ingresa valores válidos para la proporción.");
+
+                    const targetRatio = rW / rH;
+                    const sourceRatio = imageSource.width / imageSource.height;
+
+                    if (fitMode === 'stretch') {
+                        // Extender/Desproporcionar
+                        // Mantenemos el tamaño base de la imagen original para no perder calidad, 
+                        // pero ajustamos una dimensión para cumplir el ratio.
+                        // Estrategia: Mantener el ancho original, calcular nuevo alto según ratio.
+                        finalWidth = imageSource.width;
+                        finalHeight = Math.round(finalWidth / targetRatio);
+                        
+                        // Margen de error +-1 pixel (Math.round ya maneja el entero más cercano)
+                        canvas.width = finalWidth;
+                        canvas.height = finalHeight;
+                        
+                        ctx.drawImage(imageSource, 0, 0, finalWidth, finalHeight);
+
+                    } else {
+                        // Recortar (Crop)
+                        // Lógica: Encontrar el rectángulo más grande con el ratio destino dentro de la imagen fuente.
+                        
+                        let cropW, cropH;
+
+                        if (sourceRatio > targetRatio) {
+                            // La imagen es más ancha que el objetivo. Cortar lados.
+                            cropH = imageSource.height;
+                            cropW = Math.round(cropH * targetRatio);
+                            sourceX = Math.round((imageSource.width - cropW) / 2); // Centrar X
+                            sourceY = 0;
+                        } else {
+                            // La imagen es más alta que el objetivo. Cortar arriba/abajo.
+                            cropW = imageSource.width;
+                            cropH = Math.round(cropW / targetRatio);
+                            sourceX = 0;
+                            sourceY = Math.round((imageSource.height - cropH) / 2); // Centrar Y
+                        }
+
+                        // El canvas tendrá el tamaño del recorte
+                        canvas.width = cropW;
+                        canvas.height = cropH;
+
+                        // Dibujar la parte recortada
+                        ctx.drawImage(
+                            imageSource, 
+                            sourceX, sourceY, cropW, cropH, // Rectángulo fuente
+                            0, 0, cropW, cropH              // Rectángulo destino
+                        );
+                    }
+                }
+
+                // 3. Exportar al formato deseado
+                const format = document.getElementById('outputFormat').value;
+                const quality = parseFloat(document.getElementById('quality').value);
+                
+                // Convertir
+                const dataUrl = canvas.toDataURL(format, quality);
+
+                // 4. Mostrar resultados
+                previewImage.src = dataUrl;
+                previewImage.style.display = 'block';
+
+                // Configurar enlace de descarga
+                let ext = format.split('/')[1];
+                if(ext === 'jpeg') ext = 'jpg';
+                
+                downloadLink.href = dataUrl;
+                downloadLink.download = `convertida_${Date.now()}.${ext}`;
+                downloadLink.textContent = `Descargar imagen (.${ext})`;
+                downloadLink.style.display = 'inline-block';
+                downloadLink.style.fontSize = "1.5em";
+
+                statusDiv.textContent = "¡Proceso completado!";
+
+            } catch (error) {
+                console.error(error);
+                statusDiv.textContent = "Error: " + error.message;
+            }
+        }
+
+        // Promesa para cargar imagen asíncronamente
+        function loadImage(src) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = (e) => reject(e);
+                img.src = src;
+            });
+        }
+    </script>
+</body>
+</html>
